@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Claude API](https://img.shields.io/badge/Anthropic-Claude_API-D97757)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_DB-green)
-![Container](https://img.shields.io/badge/Container-UBI_9-EE0000?logo=redhat&logoColor=white)
+![Container](https://img.shields.io/badge/Container-OpenShift_ready-EE0000?logo=redhat&logoColor=white)
 
 Upload your documents (lecture notes, papers, books) and have a cited, multi-turn conversation with them. Cortex is an **agentic RAG** app: instead of running one fixed retrieval per question, **Claude decides what to search for** using tools over your knowledge base, then answers with citations that are checked against what it actually retrieved.
 
@@ -56,8 +56,8 @@ Every passage a tool returns gets a source ID (`[S1]`, `[S2]`, …). Claude must
 | Vector DB | ChromaDB, persistent on disk |
 | Embeddings | ONNX all-MiniLM-L6-v2, on CPU — documents never leave your machine for embedding |
 | UI | Streamlit |
-| Container | Red Hat UBI 9 Python 3.11, non-root, OpenShift-compatible |
-| CI | GitHub Actions: tests on 3.11/3.12, image build, container health-check smoke test |
+| Container | Python 3.12 slim, non-root, runs under OpenShift's random-UID policy |
+| CI | GitHub Actions: tests on 3.11/3.12, image build, container started as a random non-root UID and health-checked |
 
 ---
 
@@ -78,11 +78,11 @@ streamlit run app.py          # http://localhost:8501
 docker build -t cortex .      # or: podman build -t cortex .
 docker run -p 8501:8501 \
   -e ANTHROPIC_API_KEY=sk-ant-... \
-  -v cortex-data:/opt/app-root/data \
+  -v cortex-data:/app/var \
   cortex
 ```
 
-The image pre-downloads the embedding model at build time, runs as a non-root user, stores the vector DB in a volume at `/opt/app-root/data`, and exposes a health check at `/_stcore/health`.
+The image pre-downloads the embedding model at build time, runs as a non-root user, stores the vector DB in a volume at `/app/var`, and exposes a health check at `/_stcore/health`.
 
 ## Tests
 
@@ -104,7 +104,7 @@ cortex-knowledge-assistant/
 ├── knowledge_base.py    # Chunking + ChromaDB storage and search
 ├── document_loader.py   # PDF, DOCX, TXT, MD text extraction
 ├── tests/               # pytest suite (no network needed)
-├── Dockerfile           # UBI 9 image, OpenShift-friendly
+├── Dockerfile           # non-root image, OpenShift-friendly
 └── .github/workflows/   # CI: tests, image build, container smoke test
 ```
 

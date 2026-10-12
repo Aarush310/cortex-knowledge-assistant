@@ -1,34 +1,45 @@
 # Cortex — container image
-# Built on Red Hat's Universal Base Image (UBI 9) Python 3.11 image, so the same
-# image runs under Docker, Podman and OpenShift (arbitrary non-root UID, group 0).
-FROM registry.access.redhat.com/ubi9/python-311:latest
+#
+# Base: official Python 3.12 slim (Debian). Red Hat UBI 9 was evaluated first,
+# but it ships SQLite 3.34 and ChromaDB requires SQLite >= 3.35.
+#
+# OpenShift-compatible: OpenShift runs containers as a random UID in group 0,
+# so everything the app writes to is group-0 writable and root is never needed.
+FROM python:3.12-slim
 
-WORKDIR /opt/app-root/src
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HOME=/app \
+    CORTEX_DATA_DIR=/app/var/chroma_db \
+    ANONYMIZED_TELEMETRY=False \
+    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
 
-# Dependencies first so this layer is cached between code changes.
+WORKDIR /app
+
+# Dependencies first so code changes reuse this cached layer.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && pip install -r requirements.txt
 
-# Pre-download the local ONNX embedding model at build time so the container
-# starts without needing to fetch it (and works on air-gapped clusters).
+# Pre-download the local ONNX embedding model so the container starts without
+# fetching it (and works on clusters without internet access).
 RUN python -c "from chromadb.utils import embedding_functions as ef; ef.ONNXMiniLM_L6_V2()(['warm-up'])"
 
 COPY . .
 
-ENV CORTEX_DATA_DIR=/opt/app-root/data \
-    PYTHONUNBUFFERED=1 \
-    STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
-
-# OpenShift runs containers as a random UID in group 0: make app dirs group-writable.
-USER 0
-RUN mkdir -p "$CORTEX_DATA_DIR" && fix-permissions /opt/app-root -P
+# Non-root user 1001 in group 0; group 0 gets the owner's permissions.
+RUN useradd --uid 1001 --gid 0 --home-dir /app --no-create-home appuser && \
+    mkdir -p /app/var && \
+    chgrp -R 0 /app && \
+    chmod -R g=u /app
 USER 1001
 
-VOLUME ["/opt/app-root/data"]
+# Vector store lives here — mount a volume / PVC to keep it.
+VOLUME ["/app/var"]
 EXPOSE 8501
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
-  CMD curl -fsS http://localhost:8501/_stcore/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
 
 CMD ["streamlit", "run", "app.py", \
      "--server.address=0.0.0.0", "--server.port=8501", "--server.headless=true"]
