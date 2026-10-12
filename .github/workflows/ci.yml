@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run tests
+        run: pytest -v
+
+  container:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t cortex:ci .
+      # OpenShift starts containers with a random UID in group 0 — run the same way here.
+      - name: Smoke test — container starts as a random non-root UID and passes its health check
+        run: |
+          docker run -d --name cortex -p 8501:8501 --user 1000870000:0 -e ANTHROPIC_API_KEY=dummy cortex:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:8501/_stcore/health; then echo; echo "healthy"; exit 0; fi
+            sleep 2
+          done
+          docker logs cortex
+          exit 1
+      - name: App page renders inside the container
+        run: curl -fsS http://localhost:8501/ | grep -qi streamlit
+      - name: Container logs
+        if: always()
+        run: docker logs cortex || true
