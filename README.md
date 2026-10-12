@@ -1,182 +1,117 @@
-# 🧠 Cortex — Personal AI Knowledge Assistant
+# 🧠 Cortex — Agentic Knowledge Assistant on the Claude API
 
-A **Retrieval Augmented Generation (RAG)** application that lets you upload your personal documents and have intelligent, cited conversations with your own knowledge base. Ask questions in natural language and get accurate answers with source citations.
-
-Built with Python, Streamlit, ChromaDB, and Google Gemini.
-
+[![CI](https://github.com/Aarush310/cortex-knowledge-assistant/actions/workflows/ci.yml/badge.svg)](https://github.com/Aarush310/cortex-knowledge-assistant/actions/workflows/ci.yml)
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
-![Streamlit](https://img.shields.io/badge/Streamlit-1.31+-FF4B4B?logo=streamlit&logoColor=white)
+![Claude API](https://img.shields.io/badge/Anthropic-Claude_API-D97757)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_DB-green)
-![Gemini](https://img.shields.io/badge/Google_Gemini-2.5_Flash-4285F4?logo=google&logoColor=white)
+![Container](https://img.shields.io/badge/Container-UBI_9-EE0000?logo=redhat&logoColor=white)
+
+Upload your documents (lecture notes, papers, books) and have a cited, multi-turn conversation with them. Cortex is an **agentic RAG** app: instead of running one fixed retrieval per question, **Claude decides what to search for** using tools over your knowledge base, then answers with citations that are checked against what it actually retrieved.
 
 ---
 
-## What It Does
+## What makes it agentic
 
-Upload your documents (lecture notes, research papers, books, personal notes) and chat with them. Cortex retrieves the most relevant passages from your knowledge base and uses AI to synthesize accurate, cited answers.
+Claude gets two tools and runs in a loop (up to 5 steps per question):
 
-**Example queries:**
-- *"What are the key takeaways from my system design notes?"*
-- *"Compare what document A and document B say about microservices"*
-- *"Summarize the main concepts from chapter 3"*
+| Tool | What it does |
+|---|---|
+| `search_knowledge_base(query, filename?, n_results?)` | Semantic search over your documents, optionally inside one file |
+| `list_documents()` | Lists the files in the knowledge base |
 
----
+That lets Claude:
+- **Rewrite follow-ups** — "what about the second one?" becomes a standalone query using the conversation history.
+- **Decompose questions** — "compare what A and B say about microservices" becomes one filtered search per document.
+- **Stop when it has enough** — or say plainly that your documents don't contain the answer.
 
-## Features
+On the final step the engine sets `tool_choice: none`, so the loop always ends in a written answer.
 
-- **Multi-format document ingestion** — PDF, DOCX, TXT, Markdown
-- **Local vector embeddings** — documents are embedded on your machine using ONNX MiniLM (no data leaves your computer for embedding)
-- **Persistent vector store** — ChromaDB stores everything locally on disk between sessions
-- **Cited answers** — every response shows which document chunks were used, with relevance scores
-- **Conversation memory** — multi-turn chat that maintains context
-- **Modern UI** — dark editorial aesthetic with Playfair Display typography, animated grain texture, and amber/gold accents
+### Cited, verified answers
+Every passage a tool returns gets a source ID (`[S1]`, `[S2]`, …). Claude must cite those IDs, and the engine checks each one: citations that don't point at a passage retrieved in this turn are stripped and flagged. The UI shows both the **agent's tool calls** and the **cited passages**.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                    DOCUMENT INGESTION                     │
-│                                                          │
-│  PDF/DOCX/TXT/MD ──▶ Sentence-Aware Chunker             │
-│                          │                               │
-│                          ▼                               │
-│                   ONNX MiniLM Embeddings (local)         │
-│                          │                               │
-│                          ▼                               │
-│                   ChromaDB Vector Store (persistent)      │
-└──────────────────────────────────────────────────────────┘
-
-┌──────────────────────────────────────────────────────────┐
-│                     QUERY PIPELINE                        │
-│                                                          │
-│  User Question ──▶ Semantic Search (cosine similarity)   │
-│                          │                               │
-│                          ▼                               │
-│                   Top-K Relevant Chunks                   │
-│                          │                               │
-│                          ▼                               │
-│              Google Gemini 2.5 Flash (with RAG context)  │
-│                          │                               │
-│                          ▼                               │
-│              Cited Answer + Source Cards in UI            │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────── INGESTION ────────────────────────┐
+│ PDF / DOCX / TXT / MD ─▶ sentence-aware chunker (600 chars,│
+│                          100-char word-boundary overlap)   │
+│                     ─▶ ONNX MiniLM-L6-v2 embeddings (local)│
+│                     ─▶ ChromaDB, cosine HNSW (persistent)  │
+└────────────────────────────────────────────────────────────┘
+┌──────────────────────── AGENT LOOP ───────────────────────┐
+│ question + last 3 turns ─▶ Claude (Messages API + tools)  │
+│        ▲                         │ tool_use               │
+│        │ tool_result ([S#] passages)                      │
+│        └──── search_knowledge_base / list_documents ◀─────┘
+│                                  │ end_turn               │
+│                     answer ─▶ citation check ─▶ UI        │
+└────────────────────────────────────────────────────────────┘
 ```
 
----
-
-## Tech Stack
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| Frontend | Streamlit | Chat interface and document management UI |
-| Vector DB | ChromaDB | Persistent local vector storage and similarity search |
-| Embeddings | ONNX MiniLM-L6-v2 | Local document embedding (no external API needed) |
-| LLM | Google Gemini 2.5 Flash | Answer generation with RAG context |
-| Document Parsing | PyPDF, python-docx | PDF and Word document text extraction |
+| Component | Technology |
+|---|---|
+| LLM / agent | Anthropic Claude API (`claude-sonnet-5-5` by default, set `CLAUDE_MODEL` to change) |
+| Vector DB | ChromaDB, persistent on disk |
+| Embeddings | ONNX all-MiniLM-L6-v2, on CPU — documents never leave your machine for embedding |
+| UI | Streamlit |
+| Container | Red Hat UBI 9 Python 3.11, non-root, OpenShift-compatible |
+| CI | GitHub Actions: tests on 3.11/3.12, image build, container health-check smoke test |
 
 ---
 
-## Setup
-
-### Prerequisites
-- Python 3.11+
-- A free Google Gemini API key
-
-### 1. Clone the repo
+## Run it locally
 
 ```bash
-git clone https://github.com/aarushprasad/cortex-knowledge-assistant.git
+git clone https://github.com/Aarush310/cortex-knowledge-assistant.git
 cd cortex-knowledge-assistant
-```
-
-### 2. Create a virtual environment
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-### 3. Install dependencies
-
-```bash
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env          # then paste your ANTHROPIC_API_KEY
+streamlit run app.py          # http://localhost:8501
 ```
 
-### 4. Get your free Gemini API key
-
-1. Go to [Google AI Studio](https://aistudio.google.com/apikey)
-2. Sign in with your Google account
-3. Click **Create API Key**
-4. Copy the key
-
-No credit card required.
-
-### 5. Configure the API key
+## Run it in a container
 
 ```bash
-cp .env.example .env
+docker build -t cortex .      # or: podman build -t cortex .
+docker run -p 8501:8501 \
+  -e ANTHROPIC_API_KEY=sk-ant-... \
+  -v cortex-data:/opt/app-root/data \
+  cortex
 ```
 
-Open `.env` and paste your key:
-```
-GEMINI_API_KEY=your-key-here
-```
+The image pre-downloads the embedding model at build time, runs as a non-root user, stores the vector DB in a volume at `/opt/app-root/data`, and exposes a health check at `/_stcore/health`.
 
-### 6. Run the app
+## Tests
 
 ```bash
-streamlit run app.py
+pip install -r requirements-dev.txt
+pytest -v
 ```
 
-Opens at `http://localhost:8501`
+The tests run offline: the agent loop is driven by a scripted fake Claude client (tool calls, multi-search, hallucinated-citation removal, forced final answer, history trimming), the vector store uses a small deterministic embedding function, and the Streamlit app gets a boot smoke test.
 
 ---
 
-## Usage
-
-1. **Upload documents** using the sidebar file uploader
-2. Click **⚡ Ingest to Knowledge Base** to chunk, embed, and store them
-3. **Ask questions** in the chat input
-4. Click the **📎 sources** expander under any answer to see the retrieved chunks with relevance scores
-
----
-
-## Project Structure
+## Project structure
 
 ```
 cortex-knowledge-assistant/
-├── app.py                 # Streamlit UI with dark editorial theme
-├── knowledge_base.py      # ChromaDB vector store, chunking, and retrieval
-├── chat_engine.py         # RAG pipeline and Gemini API integration
-├── document_loader.py     # PDF, DOCX, TXT, MD text extraction
-├── requirements.txt       # Python dependencies
-├── .env.example           # API key template
-├── .gitignore             # Git ignore rules
-└── README.md
+├── app.py               # Streamlit UI (dark editorial theme), shows tool calls + cited sources
+├── chat_engine.py       # Agent loop on the Claude API: tools, citations, history
+├── knowledge_base.py    # Chunking + ChromaDB storage and search
+├── document_loader.py   # PDF, DOCX, TXT, MD text extraction
+├── tests/               # pytest suite (no network needed)
+├── Dockerfile           # UBI 9 image, OpenShift-friendly
+└── .github/workflows/   # CI: tests, image build, container smoke test
 ```
-
----
-
-## Key Concepts Demonstrated
-
-- **Retrieval Augmented Generation (RAG)** — combining retrieval with generative AI for grounded answers
-- **Vector databases** — embedding, storing, and querying document vectors with cosine similarity
-- **Document processing pipelines** — chunking strategies with sentence-aware splitting and overlap
-- **API integration** — working with the Google Gemini API for LLM inference
-- **Privacy-conscious design** — embeddings computed locally, only retrieved chunks sent to the LLM
-
----
 
 ## Privacy
 
-- Embeddings run locally on your CPU (ONNX MiniLM)
-- Only the top-5 retrieved chunks (~5 short passages) are sent to Google Gemini per query
-- The vector database is stored locally in `./chroma_db`
-- Free tier note: Google may use free-tier API data to improve their models
-
----
+- Embeddings run locally on CPU; the vector DB stays on your disk.
+- Only the passages Claude retrieves with its search tool are sent to the Claude API.
 
 ## License
 
@@ -184,4 +119,4 @@ MIT
 
 ---
 
-Built by [Aarush Prasad](https://github.com/aarushprasad)
+Built by [Aarush Prasad](https://github.com/Aarush310)
