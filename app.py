@@ -3,13 +3,15 @@ Cortex · Personal AI Knowledge Assistant
 A RAG-based app that lets you chat with your own documents.
 """
 
-import os
-import streamlit as st
+import html
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
+import streamlit as st
+
 from knowledge_base import KnowledgeBase
-from chat_engine import ChatEngine
+from chat_engine import ChatEngine, summarize_steps
 from document_loader import load_document
 
 # ---------- Page config ----------
@@ -487,17 +489,46 @@ st.markdown("""
 
 
 # ---------- Initialize session state ----------
+@st.cache_resource
+def get_knowledge_base() -> KnowledgeBase:
+    # One shared, persistent knowledge base per server process.
+    return KnowledgeBase()
+
+
 if "kb" not in st.session_state:
-    st.session_state.kb = KnowledgeBase(persist_dir="./chroma_db")
+    st.session_state.kb = get_knowledge_base()
 
 if "chat_engine" not in st.session_state:
-    st.session_state.chat_engine = ChatEngine(knowledge_base=st.session_state.kb)
+    try:
+        st.session_state.chat_engine = ChatEngine(knowledge_base=st.session_state.kb)
+    except ValueError as e:
+        st.error(str(e))
+        st.stop()
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "uploaded_files_list" not in st.session_state:
-    st.session_state.uploaded_files_list = []
+
+def render_sources(sources, steps=None):
+    """Show the agent's searches and the passages the answer cites."""
+    if steps:
+        with st.expander(f"🔎 {len(steps)} tool call(s) by the agent"):
+            for line in steps:
+                st.markdown(f"<div class='source-card'>{html.escape(line)}</div>", unsafe_allow_html=True)
+    if sources:
+        with st.expander(f"📎 {len(sources)} source(s) cited"):
+            for src in sources:
+                score_pct = int(max(0.0, src.get("score", 0)) * 100)
+                st.markdown(
+                    f"""<div class="source-card">
+                        <div class="source-title">
+                            [{html.escape(src.get("source_id", ""))}] {html.escape(src["filename"])}
+                            <span class="source-relevance">{score_pct}% match</span>
+                        </div>
+                        {html.escape(src["text"][:280])}...
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
 
 
 # ---------- Sidebar ----------
@@ -533,9 +564,10 @@ with st.sidebar:
                     (i + 1) / len(uploaded_files),
                     text=f"Embedding {file.name}...",
                 )
-                temp_path = Path("./temp_uploads") / file.name
-                temp_path.parent.mkdir(exist_ok=True)
-                temp_path.write_bytes(file.getvalue())
+                suffix = Path(file.name).suffix.lower()
+                with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                    tmp.write(file.getvalue())
+                    temp_path = Path(tmp.name)
 
                 try:
                     text = load_document(str(temp_path))
@@ -547,8 +579,6 @@ with st.sidebar:
                             "uploaded_at": datetime.now().isoformat(),
                         },
                     )
-                    if file.name not in st.session_state.uploaded_files_list:
-                        st.session_state.uploaded_files_list.append(file.name)
                 except Exception as e:
                     st.error(f"Failed: {file.name} — {e}")
                 finally:
@@ -577,17 +607,18 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    # Indexed documents
-    if st.session_state.uploaded_files_list:
+    # Indexed documents (read from the persistent store, so they survive a refresh)
+    indexed_files = st.session_state.kb.list_documents()
+    if indexed_files:
         st.markdown('<div class="sidebar-section">Indexed Files</div>', unsafe_allow_html=True)
-        for fname in st.session_state.uploaded_files_list:
+        for fname in indexed_files:
             ext = Path(fname).suffix.lower()
             icon_map = {".pdf": "PDF", ".txt": "TXT", ".md": "MD", ".docx": "DOC"}
             icon_label = icon_map.get(ext, "FILE")
             st.markdown(
                 f"""<div class="doc-item">
                     <div class="doc-icon">{icon_label}</div>
-                    <div class="doc-name">{fname}</div>
+                    <div class="doc-name">{html.escape(fname)}</div>
                 </div>""",
                 unsafe_allow_html=True,
             )
@@ -598,7 +629,6 @@ with st.sidebar:
     with col1:
         if st.button("🗑 Clear KB", use_container_width=True):
             st.session_state.kb.clear()
-            st.session_state.uploaded_files_list = []
             st.session_state.messages = []
             st.success("Cleared")
             st.rerun()
@@ -648,20 +678,8 @@ for msg in st.session_state.messages:
     avatar = "🧠" if msg["role"] == "assistant" else "👤"
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
-        if msg.get("sources"):
-            with st.expander(f"📎 {len(msg['sources'])} source(s) referenced"):
-                for src in msg["sources"]:
-                    score_pct = int(src.get("score", 0) * 100)
-                    st.markdown(
-                        f"""<div class="source-card">
-                            <div class="source-title">
-                                {src["filename"]}
-                                <span class="source-relevance">{score_pct}% match</span>
-                            </div>
-                            {src["text"][:280]}...
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
+        if msg["role"] == "assistant":
+            render_sources(msg.get("sources"), msg.get("steps"))
 
 # Chat input
 if prompt := st.chat_input("Ask your knowledge base anything..."):
@@ -673,36 +691,29 @@ if prompt := st.chat_input("Ask your knowledge base anything..."):
             st.markdown(prompt)
 
         with st.chat_message("assistant", avatar="🧠"):
-            with st.spinner("Retrieving & reasoning..."):
-                response, sources = st.session_state.chat_engine.ask(
+            with st.spinner("Searching & reasoning..."):
+                result = st.session_state.chat_engine.ask(
                     prompt,
                     history=st.session_state.messages[:-1],
                 )
-            st.markdown(response)
-            if sources:
-                with st.expander(f"📎 {len(sources)} source(s) referenced"):
-                    for src in sources:
-                        score_pct = int(src.get("score", 0) * 100)
-                        st.markdown(
-                            f"""<div class="source-card">
-                                <div class="source-title">
-                                    {src["filename"]}
-                                    <span class="source-relevance">{score_pct}% match</span>
-                                </div>
-                                {src["text"][:280]}...
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
+            steps = summarize_steps(result.steps)
+            st.markdown(result.answer)
+            if result.invalid_citations:
+                st.caption(
+                    "⚠️ Removed unverifiable citation(s): " + ", ".join(result.invalid_citations)
+                )
+            render_sources(result.sources, steps)
 
         st.session_state.messages.append({
             "role": "assistant",
-            "content": response,
-            "sources": sources,
+            "content": result.answer,
+            "sources": result.sources,
+            "steps": steps,
         })
 
 # ---------- Footer ----------
 st.markdown("""
 <div class="cortex-footer">
-    Built by <a href="https://github.com/aarushprasad" target="_blank">Aarush Prasad</a>
+    Built by <a href="https://github.com/Aarush310" target="_blank">Aarush Prasad</a>
 </div>
 """, unsafe_allow_html=True)

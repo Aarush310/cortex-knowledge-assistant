@@ -1,0 +1,15 @@
+.git
+.github
+.venv
+venv
+env
+__pycache__
+*.pyc
+.pytest_cache
+chroma_db
+temp_uploads
+tests
+.github
+.env
+*.md
+!README.md
