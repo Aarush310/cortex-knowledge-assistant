@@ -102,6 +102,19 @@ class KnowledgeBase:
                 })
         return hits
 
+    def list_documents(self) -> List[Dict]:
+        """Return each document's file name and chunk count."""
+        counts: Dict[str, int] = {}
+        try:
+            all_meta = self.collection.get(include=["metadatas"])
+            for m in all_meta.get("metadatas") or []:
+                if m:
+                    name = m.get("filename", m.get("doc_id", "unknown"))
+                    counts[name] = counts.get(name, 0) + 1
+        except Exception:
+            pass
+        return [{"filename": name, "chunks": n} for name, n in sorted(counts.items())]
+
     def get_stats(self) -> Dict:
         """Return basic stats about the knowledge base."""
         try:
