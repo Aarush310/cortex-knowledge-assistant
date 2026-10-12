@@ -9,6 +9,7 @@ __pycache__
 chroma_db
 temp_uploads
 tests
+.github
 .env
 *.md
 !README.md
