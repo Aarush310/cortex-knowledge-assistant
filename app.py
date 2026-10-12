@@ -3,6 +3,7 @@ Cortex · Personal AI Knowledge Assistant
 A RAG-based app that lets you chat with your own documents.
 """
 
+import html
 import os
 import streamlit as st
 from datetime import datetime
@@ -643,25 +644,37 @@ elif not st.session_state.messages:
     </div>
     """, unsafe_allow_html=True)
 
+def render_agent_details(steps, sources):
+    """Show what the agent did (its tool calls) and the chunks it retrieved."""
+    if steps:
+        with st.expander(f"🔎 {len(steps)} agent step(s)"):
+            for step in steps:
+                if step["tool"] == "search_knowledge_base":
+                    st.markdown(f'Searched for: `{step["input"].get("query", "")}`')
+                else:
+                    st.markdown(f'Called `{step["tool"]}`')
+    if sources:
+        with st.expander(f"📎 {len(sources)} source(s) referenced"):
+            for src in sources:
+                score_pct = int(src.get("score", 0) * 100)
+                st.markdown(
+                    f"""<div class="source-card">
+                        <div class="source-title">
+                            {html.escape(src["filename"])}
+                            <span class="source-relevance">{score_pct}% match</span>
+                        </div>
+                        {html.escape(src["text"][:280])}...
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+
+
 # Chat history
 for msg in st.session_state.messages:
     avatar = "🧠" if msg["role"] == "assistant" else "👤"
     with st.chat_message(msg["role"], avatar=avatar):
         st.markdown(msg["content"])
-        if msg.get("sources"):
-            with st.expander(f"📎 {len(msg['sources'])} source(s) referenced"):
-                for src in msg["sources"]:
-                    score_pct = int(src.get("score", 0) * 100)
-                    st.markdown(
-                        f"""<div class="source-card">
-                            <div class="source-title">
-                                {src["filename"]}
-                                <span class="source-relevance">{score_pct}% match</span>
-                            </div>
-                            {src["text"][:280]}...
-                        </div>""",
-                        unsafe_allow_html=True,
-                    )
+        render_agent_details(msg.get("steps"), msg.get("sources"))
 
 # Chat input
 if prompt := st.chat_input("Ask your knowledge base anything..."):
@@ -673,36 +686,24 @@ if prompt := st.chat_input("Ask your knowledge base anything..."):
             st.markdown(prompt)
 
         with st.chat_message("assistant", avatar="🧠"):
-            with st.spinner("Retrieving & reasoning..."):
-                response, sources = st.session_state.chat_engine.ask(
+            with st.spinner("Searching & reasoning..."):
+                response, sources, steps = st.session_state.chat_engine.ask(
                     prompt,
                     history=st.session_state.messages[:-1],
                 )
             st.markdown(response)
-            if sources:
-                with st.expander(f"📎 {len(sources)} source(s) referenced"):
-                    for src in sources:
-                        score_pct = int(src.get("score", 0) * 100)
-                        st.markdown(
-                            f"""<div class="source-card">
-                                <div class="source-title">
-                                    {src["filename"]}
-                                    <span class="source-relevance">{score_pct}% match</span>
-                                </div>
-                                {src["text"][:280]}...
-                            </div>""",
-                            unsafe_allow_html=True,
-                        )
+            render_agent_details(steps, sources)
 
         st.session_state.messages.append({
             "role": "assistant",
             "content": response,
             "sources": sources,
+            "steps": steps,
         })
 
 # ---------- Footer ----------
 st.markdown("""
 <div class="cortex-footer">
-    Built by <a href="https://github.com/aarushprasad" target="_blank">Aarush Prasad</a>
+    Built by <a href="https://github.com/Aarush310" target="_blank">Aarush Prasad</a>
 </div>
 """, unsafe_allow_html=True)
