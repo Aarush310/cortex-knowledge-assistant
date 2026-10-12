@@ -8,7 +8,7 @@ Built with Python, Streamlit, ChromaDB, and the Anthropic Claude API.
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.31+-FF4B4B?logo=streamlit&logoColor=white)
 ![ChromaDB](https://img.shields.io/badge/ChromaDB-Vector_DB-green)
 ![Claude](https://img.shields.io/badge/Anthropic-Claude_API-D97757)
-![Docker](https://img.shields.io/badge/Docker-UBI_9-2496ED?logo=docker&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-non--root-2496ED?logo=docker&logoColor=white)
 
 ---
 
@@ -32,7 +32,7 @@ Upload your documents (lecture notes, research papers, books, personal notes) an
 - **Persistent vector store** — ChromaDB stores everything locally on disk between sessions
 - **Cited answers + visible reasoning** — every answer shows which searches the agent ran and which chunks it used, with relevance scores
 - **Conversation memory** — multi-turn chat with the last 6 messages as context
-- **Containerised** — Dockerfile on Red Hat UBI 9, runs as a non-root user (OpenShift-compatible), verified in CI
+- **Containerised** — Dockerfile that runs as a non-root user (OpenShift-compatible), verified in CI
 - **Tested** — the agent loop is unit-tested with a fake Claude client, so CI needs no API key
 - **Modern UI** — dark editorial aesthetic with Playfair Display typography, animated grain texture, and amber/gold accents
 
@@ -93,7 +93,7 @@ The loop is capped at 5 steps so a confused agent can't loop forever, and retrie
 | Vector DB | ChromaDB | Persistent local vector storage and similarity search |
 | Embeddings | ONNX MiniLM-L6-v2 | Local document embedding (no external API needed) |
 | Document Parsing | PyPDF, python-docx | PDF and Word document text extraction |
-| Container | Docker, Red Hat UBI 9 | Non-root, OpenShift-compatible image |
+| Container | Docker (Python 3.12 slim) | Non-root, OpenShift-compatible image |
 | CI | GitHub Actions | Tests on Python 3.11–3.13, image build + non-root run check |
 
 ---
@@ -152,7 +152,7 @@ docker build -t cortex .
 docker run -p 8501:8501 -e ANTHROPIC_API_KEY=your-key-here cortex
 ```
 
-Mount a volume at `/opt/app-root/src/chroma_db` to keep your knowledge base between container restarts. The image runs as a non-root user and every writable folder belongs to group 0, so it also runs under OpenShift's random-UID policy; CI checks this by starting it with `--user 1000870000:0`.
+Mount a volume at `/app/chroma_db` to keep your knowledge base between container restarts. The image runs as a non-root user and every writable folder belongs to group 0, so it also runs under OpenShift's random-UID policy; CI checks this by starting it with `--user 1000870000:0`.
 
 ### Run the tests
 
@@ -181,7 +181,7 @@ cortex-knowledge-assistant/
 ├── knowledge_base.py      # ChromaDB vector store, chunking, retrieval, document list
 ├── document_loader.py     # PDF, DOCX, TXT, MD text extraction
 ├── tests/                 # Agent loop (fake Claude client) and chunking tests
-├── Dockerfile             # UBI 9 image, non-root, OpenShift-compatible
+├── Dockerfile             # Non-root, OpenShift-compatible image
 ├── .github/workflows/     # CI: tests + Docker build and non-root run check
 ├── requirements.txt       # Python dependencies
 ├── requirements-dev.txt   # Test dependencies
