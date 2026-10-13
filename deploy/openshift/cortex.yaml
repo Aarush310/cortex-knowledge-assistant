@@ -1,0 +1,131 @@
+# Cortex on OpenShift — builds the image inside the cluster straight from GitHub,
+# so no external registry is needed. Works in the free Developer Sandbox.
+#
+#   oc create secret generic cortex-llm --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+#   oc apply -f deploy/openshift/cortex.yaml
+#   oc logs -f bc/cortex                 # watch the image build (~3-5 min)
+#   oc get route cortex -o jsonpath='{.spec.host}'
+#
+# Flow: BuildConfig (Docker strategy, GitHub source) → ImageStream cortex:latest
+#       → image-change trigger rolls out the Deployment → Service → TLS Route.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: cortex
+  labels: {app: cortex}
+spec:
+  lookupPolicy:
+    local: true          # lets the Deployment refer to the image simply as "cortex:latest"
+---
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: cortex
+  labels: {app: cortex}
+spec:
+  source:
+    type: Git
+    git:
+      uri: https://github.com/Aarush310/cortex-knowledge-assistant.git
+      ref: main
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  output:
+    to:
+      kind: ImageStreamTag
+      name: cortex:latest
+  triggers:
+    - type: ConfigChange   # build once when this is first applied
+  resources:
+    limits: {memory: 2Gi}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cortex-data
+  labels: {app: cortex}
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cortex
+  labels: {app: cortex}
+  annotations:
+    # Roll out automatically whenever a new image lands in the ImageStream.
+    image.openshift.io/triggers: >-
+      [{"from":{"kind":"ImageStreamTag","name":"cortex:latest"},
+        "fieldPath":"spec.template.spec.containers[?(@.name==\"cortex\")].image"}]
+spec:
+  replicas: 1
+  strategy: {type: Recreate}   # the vector store is on a ReadWriteOnce volume
+  selector:
+    matchLabels: {app: cortex}
+  template:
+    metadata:
+      labels: {app: cortex}
+    spec:
+      containers:
+        - name: cortex
+          image: cortex:latest
+          ports:
+            - containerPort: 8501
+              name: http
+          envFrom:
+            - secretRef:
+                name: cortex-llm   # ANTHROPIC_API_KEY (and optionally CLAUDE_MODEL)
+          volumeMounts:
+            - name: data
+              mountPath: /app/var
+          resources:
+            requests: {cpu: 200m, memory: 512Mi}
+            limits: {cpu: "1", memory: 1536Mi}
+          readinessProbe:
+            httpGet: {path: /_stcore/health, port: http}
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: {path: /_stcore/health, port: http}
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: cortex-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cortex
+  labels: {app: cortex}
+spec:
+  selector: {app: cortex}
+  ports:
+    - name: http
+      port: 8501
+      targetPort: http
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: cortex
+  labels: {app: cortex}
+spec:
+  to:
+    kind: Service
+    name: cortex
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect

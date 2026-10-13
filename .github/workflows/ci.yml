@@ -45,3 +45,13 @@ jobs:
       - name: Container logs
         if: always()
         run: docker logs cortex || true
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate OpenShift manifests
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar xz
+          # BuildConfig, ImageStream and Route are OpenShift CRDs without upstream schemas.
+          ./kubeconform -strict -summary -ignore-missing-schemas deploy/openshift/

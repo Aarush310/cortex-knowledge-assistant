@@ -84,6 +84,27 @@ docker run -p 8501:8501 \
 
 The image pre-downloads the embedding model at build time, runs as a non-root user, stores the vector DB in a volume at `/app/var`, and exposes a health check at `/_stcore/health`.
 
+## Deploy on OpenShift (works in the free Developer Sandbox)
+
+`deploy/openshift/cortex.yaml` builds the image **inside the cluster** straight from this GitHub repo (BuildConfig with the Docker strategy → ImageStream), then rolls it out with an image-change trigger behind a TLS Route. No external registry needed.
+
+```bash
+oc login ...                                   # e.g. "Copy login command" from the Sandbox console
+oc create secret generic cortex-llm --from-literal=ANTHROPIC_API_KEY=sk-ant-...
+oc apply -f deploy/openshift/cortex.yaml
+oc logs -f bc/cortex                           # watch the build
+oc get route cortex -o jsonpath='{.spec.host}' # open https://<host>
+```
+
+Rebuild after pushing new code: `oc start-build cortex --follow`.
+
+| Object | Why |
+|---|---|
+| ImageStream + BuildConfig | Build from Git in-cluster; new image triggers a rollout |
+| PersistentVolumeClaim | Keeps the ChromaDB vector store across pod restarts |
+| Deployment | Non-root, all capabilities dropped, readiness/liveness probes on `/_stcore/health`, API key from a Secret |
+| Service + Route | Stable in-cluster address and an HTTPS URL (edge TLS) |
+
 ## Tests
 
 ```bash
@@ -105,6 +126,7 @@ cortex-knowledge-assistant/
 ├── document_loader.py   # PDF, DOCX, TXT, MD text extraction
 ├── tests/               # pytest suite (no network needed)
 ├── Dockerfile           # non-root image, OpenShift-friendly
+├── deploy/openshift/    # in-cluster build + Deployment, Service, Route, PVC
 └── .github/workflows/   # CI: tests, image build, container smoke test
 ```
 
